@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>The Overworld · Pet Value List</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #080b14; }
+  * { box-sizing: border-box; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React + ReactDOM (UMD builds) -->
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<!-- Babel standalone: lets the browser run JSX directly with no build step -->
+<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useCallback } = React;
+
+/* ────────────────────────────────────────────────────────────────────────
+   STORAGE SHIM
+   The original version of this app ran inside Claude's artifact sandbox
+   and used `window.storage`, a key/value API that only exists there.
+   This GitHub/static-hosting version replaces it with a localStorage-backed
+   shim with the exact same method signatures, so the rest of the app code
+   below is untouched.
+
+   IMPORTANT LIMITATION: localStorage is per-browser, not a real shared
+   backend. That means "admin saves a change -> all visitors see it" will
+   only work for tabs/browsers on the SAME device. If you need true
+   cross-visitor syncing (e.g. you update prices from your phone and
+   everyone else's browser sees it), you'll need to wire this up to a
+   small free backend (Firebase Realtime Database / Firestore, Supabase,
+   or a simple JSON API) instead of localStorage. Ask if you'd like that
+   added — happy to wire it in.
+──────────────────────────────────────────────────────────────────────── */
+window.storage = {
+  async get(key) {
+    const raw = localStorage.getItem(key);
+    if (raw === null) throw new Error("Key not found: " + key);
+    return { key, value: raw };
+  },
+  async set(key, value) {
+    localStorage.setItem(key, value);
+    return { key, value };
+  },
+  async delete(key) {
+    localStorage.removeItem(key);
+    return { key, deleted: true };
+  },
+  async list(prefix) {
+    const keys = Object.keys(localStorage).filter(k => !prefix || k.startsWith(prefix));
+    return { keys, prefix };
+  },
+};
+
+/* ────────────────────────────────────────────────────────────────────────
+   APP CODE (unchanged from the original, aside from the import/export
+   lines which don't apply in a plain <script> context)
+──────────────────────────────────────────────────────────────────────── */
+
+const ADMIN_PASSWORD = "overworld2025";
+const STORAGE_KEY = "ow_pets_v2";
+const MULT = { normal: 1, golden: 1.25, rainbow: 1.5 };
+const CAT_ORDER = ["Limited", "Normal", "Summer"];
+
+const DEFAULT_PETS = [
+  { id: 1,  name: "1M Rebirth",              cat: "Limited", value: 330, emoji: "🔄", exist: 1466, image: "", trend: "up"   },
+  { id: 2,  name: "1M Click",                cat: "Limited", value: 112, emoji: "👆", exist: 550,  image: "", trend: "down" },
+  { id: 3,  name: "Clicker Trophy",          cat: "Limited", value: 156, emoji: "🏆", exist: 735,  image: "", trend: "up"   },
+  { id: 4,  name: "Fireworks",               cat: "Limited", value: 136, emoji: "🎆", exist: 651,  image: "", trend: "down" },
+  { id: 5,  name: "Core Guardian",           cat: "Normal",  value: 273, emoji: "🛡️", exist: 1227, image: "", trend: "up"   },
+  { id: 6,  name: "Kitsune",                 cat: "Normal",  value: 267, emoji: "🦊", exist: 1201, image: "", trend: "up"   },
+  { id: 7,  name: "Petal Moth",              cat: "Normal",  value: 168, emoji: "🦋", exist: 786,  image: "", trend: "down" },
+  { id: 8,  name: "Equalizer",               cat: "Normal",  value: 134, emoji: "⚖️", exist: 642,  image: "", trend: "down" },
+  { id: 9,  name: "Hellwing",                cat: "Normal",  value: 77,  emoji: "😈", exist: 403,  image: "", trend: "down" },
+  { id: 10, name: "Ophanim",                 cat: "Normal",  value: 332, emoji: "👁️", exist: 1474, image: "", trend: "up"   },
+  { id: 11, name: "Godly Gem",               cat: "Normal",  value: 178, emoji: "💎", exist: 827,  image: "", trend: "up"   },
+  { id: 12, name: "Acorn",                   cat: "Normal",  value: 136, emoji: "🌰", exist: 651,  image: "", trend: "down" },
+  { id: 13, name: "Chocolate Ice Cream",     cat: "Normal",  value: 168, emoji: "🍫", exist: 786,  image: "", trend: "down" },
+  { id: 14, name: "Poseidon",                cat: "Summer",  value: 5,   emoji: "🔱", exist: 101,  image: "", trend: "down" },
+  { id: 15, name: "Chest Mimic in a Bucket", cat: "Summer",  value: 529, emoji: "📦", exist: 2300, image: "", trend: "up"   },
+  { id: 16, name: "Turtle in a Bucket",      cat: "Summer",  value: 419, emoji: "🐢", exist: 1840, image: "", trend: "up"   },
+  { id: 17, name: "Cat in a Bucket",         cat: "Summer",  value: 457, emoji: "🐱", exist: 2000, image: "", trend: "up"   },
+  { id: 18, name: "Dog in a Bucket",         cat: "Summer",  value: 415, emoji: "🐶", exist: 1818, image: "", trend: "up"   },
+];
+
+const calcVal = (base, v) => Math.round(base * MULT[v]);
+const fmtNum  = (n) => Number(n).toLocaleString();
+
+const CAT_META = {
+  Normal:  { border: "#5a6aaf", text: "#a0b0ff", bg: "rgba(90,106,175,.15)",  label: "Normal" },
+  Limited: { border: "#c85a20", text: "#ff9055", bg: "rgba(200,90,32,.15)",   label: "Limited" },
+  Summer:  { border: "#1a9980", text: "#30d4b4", bg: "rgba(26,153,128,.15)",  label: "Summer Event" },
+};
+
+const VARIANT_META = {
+  normal:  { border: "#5a6aaf", text: "#a0b0ff", bg: "rgba(90,106,175,.12)",  label: "Normal",   icon: "" },
+  golden:  { border: "#c8962a", text: "#f0c050", bg: "rgba(240,192,80,.1)",   label: "Golden",   icon: "✦ " },
+  rainbow: { border: "#8a4fcf", text: "#c07aff", bg: "rgba(192,122,255,.1)",  label: "Rainbow",  icon: "◈ " },
+};
+
+// ─── Shared storage helpers ──────────────────────────────────────────────────
+async function loadSharedPets() {
+  try {
+    const r = await window.storage.get(STORAGE_KEY, true);
+    if (r && r.value) return JSON.parse(r.value);
+  } catch {}
+  return null;
+}
+
+async function saveSharedPets(list) {
+  try {
+    await window.storage.set(STORAGE_KEY, JSON.stringify(list), true);
+    return true;
+  } catch (err) {
+    console.error("Storage save failed:", err);
+    return false;
+  }
+}
+
+// ─── App ─────────────────────────────────────────────────────────────────────
+
+function App() {
+  const [pets, setPets]               = useState([]);
+  const [loading, setLoading]         = useState(true);
+  const [saveStatus, setSaveStatus]   = useState("idle"); // idle | saving | saved | error
+  const [isAdmin, setIsAdmin]         = useState(false);
+  const [showPw, setShowPw]           = useState(false);
+  const [pwValue, setPwValue]         = useState("");
+  const [pwErr, setPwErr]             = useState("");
+  const [activeTab, setActiveTab]     = useState("all");
+  const [variant, setVariant]         = useState("normal");
+  const [search, setSearch]           = useState("");
+  const [sortOrder, setSortOrder]     = useState("value-desc");
+  const [vaultRows, setVaultRows]     = useState([]);
+  const [nextId, setNextId]           = useState(100);
+  const [savedIds, setSavedIds]       = useState({});
+  const [draftPets, setDraftPets]     = useState([]);
+  const [lastSync, setLastSync]       = useState(null);
+
+  // ── Initial load ────────────────────────────────────────────────────────────
+  useEffect(() => {
+    (async () => {
+      const loaded = await loadSharedPets();
+      if (loaded) {
+        setPets(loaded);
+        setNextId(Math.max(...loaded.map(p => p.id), 99) + 1);
+      } else {
+        setPets(JSON.parse(JSON.stringify(DEFAULT_PETS)));
+      }
+      setLastSync(new Date());
+      setLoading(false);
+    })();
+  }, []);
+
+  // ── Poll for updates every 30 s so viewers see admin changes live ───────────
+  useEffect(() => {
+    if (isAdmin) return; // admin manages their own state
+    const id = setInterval(async () => {
+      const fresh = await loadSharedPets();
+      if (fresh) {
+        setPets(fresh);
+        setLastSync(new Date());
+      }
+    }, 30000);
+    return () => clearInterval(id);
+  }, [isAdmin]);
+
+  // ── Sync draft whenever pets or admin status changes ────────────────────────
+  useEffect(() => {
+    if (isAdmin) setDraftPets(JSON.parse(JSON.stringify(pets)));
+  }, [isAdmin, pets]);
+
+  // ── Save to shared storage ───────────────────────────────────────────────────
+  const savePets = useCallback(async (list) => {
+    setSaveStatus("saving");
+    const ok = await saveSharedPets(list);
+    setPets(list);
+    setSaveStatus(ok ? "saved" : "error");
+    setTimeout(() => setSaveStatus("idle"), 2000);
+  }, []);
+
+  // ── Auth ─────────────────────────────────────────────────────────────────────
+  const checkPassword = () => {
+    if (pwValue === ADMIN_PASSWORD) {
+      setIsAdmin(true); setShowPw(false); setPwValue(""); setPwErr("");
+    } else {
+      setPwErr("Wrong password. Try again."); setPwValue("");
+    }
+  };
+  const adminLogout = () => { setIsAdmin(false); setDraftPets([]); };
+
+  // ── Admin CRUD ───────────────────────────────────────────────────────────────
+  const updateDraft = (id, field, value) =>
+    setDraftPets(prev => prev.map(p => p.id === id ? { ...p, [field]: value } : p));
+
+  const saveSingle = async (id) => {
+    const draft = draftPets.find(x => x.id === id);
+    if (!draft) return;
+    const updated = pets.map(p => p.id === id ? draft : p);
+    // If it's a brand-new pet not in pets yet, append it
+    if (!pets.find(p => p.id === id)) updated.push(draft);
+    await savePets(updated);
+    setSavedIds(prev => ({ ...prev, [id]: true }));
+    setTimeout(() => setSavedIds(prev => { const n = { ...prev }; delete n[id]; return n; }), 1800);
+  };
+
+  const deletePet = async (id) => {
+    if (!window.confirm("Delete this pet from the value list? This updates for everyone.")) return;
+    const updated = pets.filter(p => p.id !== id);
+    await savePets(updated);
+    setDraftPets(prev => prev.filter(p => p.id !== id));
+  };
+
+  const addNewPet = () => {
+    const id = nextId;
+    setNextId(id + 1);
+    const newPet = { id, name: "New Pet", cat: "Normal", value: 100, emoji: "⭐", exist: 500, image: "", trend: "up" };
+    // Add to draft only — admin must save explicitly
+    setDraftPets(prev => [{ ...newPet }, ...prev]);
+  };
+
+  const handleImageUpload = (id, file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => updateDraft(id, "image", e.target.result);
+    reader.readAsDataURL(file);
+  };
+
+  // ── Filtered / sorted list ───────────────────────────────────────────────────
+  const filtered = pets
+    .filter(p => {
+      if (activeTab !== "all" && p.cat !== activeTab) return false;
+      if (search && !p.name.toLowerCase().includes(search.toLowerCase())) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      if (sortOrder === "value-desc") return b.value - a.value;
+      if (sortOrder === "value-asc")  return a.value - b.value;
+      if (sortOrder === "name-asc")   return a.name.localeCompare(b.name);
+      if (sortOrder === "name-desc")  return b.name.localeCompare(a.name);
+      return 0;
+    });
+
+  const vaultTotal = vaultRows.reduce((sum, row) => {
+    const pet = pets.find(p => p.name === row.pet);
+    return pet ? sum + calcVal(pet.value, row.variant) * row.qty : sum;
+  }, 0);
+
+  // ── Save status badge ─────────────────────────────────────────────────────────
+  const statusBadge = saveStatus === "saving"
+    ? { text: "⏳ Saving…",           color: "#f0c050", bg: "rgba(240,192,80,.1)",  border: "#c8962a" }
+    : saveStatus === "saved"
+    ? { text: "✓ Saved for everyone", color: "#30d454", bg: "rgba(48,212,84,.1)",   border: "#1a9960" }
+    : saveStatus === "error"
+    ? { text: "✗ Save failed",        color: "#e04040", bg: "rgba(224,64,64,.1)",   border: "#a03030" }
+    : null;
+
+  // ────────────────────────────────────────────────────────────────────────────
+  if (loading) return (
+    <div style={{ background: "#080b14", minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12 }}>
+      <div style={{ width: 36, height: 36, border: "3px solid #1e2338", borderTop: "3px solid #5a6aaf", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
+      <div style={{ color: "#4a5070", fontFamily: "'Inter', sans-serif", fontSize: 12, letterSpacing: 2, textTransform: "uppercase" }}>Loading value list…</div>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+
+  return (
+    <div style={{ background: "#080b14", color: "#c8cfe8", fontFamily: "'Inter', sans-serif", minHeight: "100vh", paddingBottom: 100 }}>
+
+      {/* ── Password overlay ── */}
+      {showPw && (
+        <div
+          style={{ position: "fixed", inset: 0, zIndex: 300, background: "rgba(0,0,0,.75)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center" }}
+          onClick={e => e.target === e.currentTarget && setShowPw(false)}
+        >
+          <div style={{ background: "#10141f", border: "1px solid #1e2338", borderRadius: 20, padding: "32px 28px", width: 320, textAlign: "center", boxShadow: "0 24px 64px rgba(0,0,0,.6)" }}>
+            <div style={{ fontSize: 28, marginBottom: 10 }}>🔒</div>
+            <div style={{ fontSize: 17, fontWeight: 800, color: "#fff", marginBottom: 6 }}>Admin Access</div>
+            <div style={{ fontSize: 12, color: "#4a5070", marginBottom: 20 }}>Changes you save will update for all visitors</div>
+            <input
+              style={{ width: "100%", background: "#080b14", border: "1px solid #1e2338", borderRadius: 10, color: "#fff", fontFamily: "inherit", fontSize: 15, letterSpacing: 4, padding: "11px 14px", outline: "none", textAlign: "center", marginBottom: 10, boxSizing: "border-box" }}
+              type="password" placeholder="••••••••" maxLength={32} value={pwValue} autoFocus
+              onChange={e => { setPwValue(e.target.value); setPwErr(""); }}
+              onKeyDown={e => { if (e.key === "Enter") checkPassword(); if (e.key === "Escape") setShowPw(false); }}
+            />
+            <div style={{ fontSize: 11, color: "#e04040", minHeight: 16, marginBottom: 10 }}>{pwErr}</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button style={{ flex: 1, padding: 11, borderRadius: 10, fontFamily: "inherit", fontSize: 13, fontWeight: 700, cursor: "pointer", background: "transparent", border: "1px solid #1e2338", color: "#4a5070" }} onClick={() => setShowPw(false)}>Cancel</button>
+              <button style={{ flex: 1, padding: 11, borderRadius: 10, fontFamily: "inherit", fontSize: 13, fontWeight: 700, cursor: "pointer", background: "rgba(90,106,175,.2)", border: "1px solid #5a6aaf", color: "#a0b0ff" }} onClick={checkPassword}>Enter</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Hero header ── */}
+      <div style={{ textAlign: "center", padding: "52px 16px 36px", position: "relative" }}>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase", color: "#4a5070", marginBottom: 14 }}>The Overworld</div>
+        <div style={{ fontSize: 38, fontWeight: 900, color: "#fff", letterSpacing: -1, lineHeight: 1, marginBottom: 8 }}>Pet Value List</div>
+        <div style={{ fontSize: 13, color: "#4a5070", letterSpacing: 1 }}>Community estimates · Qi Tokens</div>
+        {lastSync && !isAdmin && (
+          <div style={{ fontSize: 10, color: "#2a3050", marginTop: 8, letterSpacing: .5 }}>
+            Last synced {lastSync.toLocaleTimeString()}
+          </div>
+        )}
+        <div style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 24, flexWrap: "wrap" }}>
+          {["golden", "rainbow"].map(v => {
+            const m = VARIANT_META[v];
+            return (
+              <div key={v} style={{ fontSize: 12, fontWeight: 600, padding: "6px 14px", borderRadius: 20, border: `1px solid ${m.border}`, color: m.text, background: m.bg }}>
+                {m.icon}{m.label} ×{MULT[v].toFixed(2)}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── Admin panel ── */}
+      {isAdmin && (
+        <div style={{ maxWidth: 540, margin: "0 auto", padding: "0 16px 40px" }}>
+          <div style={{ background: "#10141f", border: "1.5px solid #c8962a", borderRadius: 16, padding: "14px 18px", marginBottom: 18, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "#f0c050", background: "rgba(240,192,80,.1)", border: "1px solid #c8962a", padding: "3px 10px", borderRadius: 20, whiteSpace: "nowrap" }}>⚙ Admin Mode</span>
+            {statusBadge && (
+              <span style={{ fontSize: 11, fontWeight: 700, color: statusBadge.color, background: statusBadge.bg, border: `1px solid ${statusBadge.border}`, padding: "3px 10px", borderRadius: 20 }}>
+                {statusBadge.text}
+              </span>
+            )}
+            <button style={{ fontSize: 11, fontWeight: 600, color: "#4a5070", background: "transparent", border: "1px solid #1e2338", borderRadius: 8, padding: "5px 10px", cursor: "pointer", fontFamily: "inherit" }} onClick={adminLogout}>Log out</button>
+          </div>
+
+          <div style={{ background: "rgba(90,106,175,.06)", border: "1px solid #1e2338", borderRadius: 12, padding: "10px 14px", marginBottom: 18, fontSize: 12, color: "#4a5070", lineHeight: 1.6 }}>
+            💡 <strong style={{ color: "#6070a0" }}>How saving works:</strong> When you click <strong style={{ color: "#6070a0" }}>Save</strong> on a pet, it updates storage immediately. On this static version, that update is stored in <em>this browser only</em> — see the README for notes on enabling true cross-visitor sync.
+          </div>
+
+          <button
+            style={{ width: "100%", padding: 13, borderRadius: 12, background: "rgba(48,212,84,.07)", border: "1.5px dashed #30d454", color: "#30d454", fontFamily: "inherit", fontSize: 13, fontWeight: 700, cursor: "pointer", marginBottom: 20, letterSpacing: .4 }}
+            onClick={addNewPet}
+          >+ Add New Pet</button>
+
+          {draftPets.map(p => (
+            <AdminCard key={p.id} p={p} saved={!!savedIds[p.id]}
+              onUpdate={(f, v) => updateDraft(p.id, f, v)}
+              onSave={() => saveSingle(p.id)}
+              onDelete={() => deletePet(p.id)}
+              onImageUpload={file => handleImageUpload(p.id, file)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* ── Public view ── */}
+      {!isAdmin && (
+        <div style={{ maxWidth: 560, margin: "0 auto" }}>
+
+          {/* Controls */}
+          <div style={{ padding: "0 16px 14px", display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: 180, position: "relative" }}>
+              <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "#4a5070", fontSize: 13 }}>🔍</span>
+              <input
+                style={{ width: "100%", background: "#10141f", border: "1px solid #1e2338", borderRadius: 10, color: "#c8cfe8", fontFamily: "inherit", fontSize: 13, padding: "10px 12px 10px 34px", outline: "none", boxSizing: "border-box" }}
+                placeholder="Search pets…" value={search} onChange={e => setSearch(e.target.value)}
+              />
+            </div>
+            <select
+              style={{ background: "#10141f", border: "1px solid #1e2338", borderRadius: 10, color: "#c8cfe8", fontFamily: "inherit", fontSize: 13, padding: "10px 12px", outline: "none", cursor: "pointer" }}
+              value={sortOrder} onChange={e => setSortOrder(e.target.value)}
+            >
+              <option value="value-desc">Highest first</option>
+              <option value="value-asc">Lowest first</option>
+              <option value="name-asc">A → Z</option>
+              <option value="name-desc">Z → A</option>
+            </select>
+          </div>
+
+          {/* Category tabs */}
+          <div style={{ display: "flex", gap: 6, padding: "0 16px 14px", flexWrap: "wrap" }}>
+            {[["all","All"], ["Normal","Normal"], ["Limited","Limited"], ["Summer","Summer"]].map(([k, l]) => (
+              <button key={k}
+                style={{ padding: "7px 16px", borderRadius: 20, border: `1px solid ${activeTab === k ? "#5a6aaf" : "#1e2338"}`, background: activeTab === k ? "#1e2338" : "transparent", color: activeTab === k ? "#fff" : "#4a5070", fontFamily: "inherit", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+                onClick={() => setActiveTab(k)}
+              >{l}</button>
+            ))}
+          </div>
+
+          {/* Variant selector */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 16px 24px", flexWrap: "wrap" }}>
+            <span style={{ fontSize: 10, color: "#4a5070", letterSpacing: 1, textTransform: "uppercase", marginRight: 2 }}>Variant:</span>
+            {["normal","golden","rainbow"].map(v => {
+              const m = VARIANT_META[v];
+              const active = variant === v;
+              return (
+                <button key={v}
+                  style={{ padding: "6px 14px", borderRadius: 20, border: `1px solid ${active ? m.border : "#1e2338"}`, background: active ? m.bg : "transparent", color: active ? m.text : "#4a5070", fontFamily: "inherit", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+                  onClick={() => setVariant(v)}
+                >{m.icon}{m.label}</button>
+              );
+            })}
+          </div>
+
+          {/* Pet cards */}
+          {filtered.length === 0
+            ? <div style={{ textAlign: "center", padding: "60px 16px", color: "#4a5070", fontSize: 14 }}>No pets match your search.</div>
+            : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "0 16px" }}>
+                {activeTab === "all"
+                  ? CAT_ORDER.map(cat => {
+                      const group = filtered.filter(p => p.cat === cat);
+                      if (!group.length) return null;
+                      const cm = CAT_META[cat];
+                      return (
+                        <div key={cat}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 0 12px" }}>
+                            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", padding: "4px 12px", borderRadius: 20, border: `1px solid ${cm.border}`, color: cm.text, background: cm.bg, whiteSpace: "nowrap" }}>{cm.label}</span>
+                            <div style={{ flex: 1, height: 1, background: "#1e2338" }} />
+                          </div>
+                          {group.map(p => <PetCard key={p.id} p={p} variant={variant} />)}
+                        </div>
+                      );
+                    })
+                  : filtered.map(p => <PetCard key={p.id} p={p} variant={variant} />)
+                }
+              </div>
+            )
+          }
+
+          {/* Vault Calculator */}
+          <div style={{ margin: "40px 16px 0" }}>
+            <div style={{ background: "#10141f", border: "1px solid #1e2338", borderRadius: 18, overflow: "hidden" }}>
+              <div style={{ padding: "16px 20px", borderBottom: "1px solid #1e2338", display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 18 }}>🗄️</span>
+                <span style={{ fontSize: 14, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: 1 }}>Vault Calculator</span>
+              </div>
+              <div style={{ padding: "18px 20px" }}>
+                {vaultRows.map(row => (
+                  <div key={row.id} style={{ display: "grid", gridTemplateColumns: "1fr 110px 64px 36px", gap: 6, alignItems: "center", marginBottom: 8 }}>
+                    <select
+                      style={{ background: "#080b14", border: "1px solid #1e2338", borderRadius: 8, color: "#c8cfe8", fontFamily: "inherit", fontSize: 12, padding: "8px 8px", outline: "none", width: "100%", boxSizing: "border-box" }}
+                      value={row.pet} onChange={e => setVaultRows(prev => prev.map(r => r.id === row.id ? { ...r, pet: e.target.value } : r))}
+                    >
+                      {pets.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
+                    </select>
+                    <select
+                      style={{ background: "#080b14", border: "1px solid #1e2338", borderRadius: 8, color: "#c8cfe8", fontFamily: "inherit", fontSize: 12, padding: "8px 8px", outline: "none", width: "100%", boxSizing: "border-box" }}
+                      value={row.variant} onChange={e => setVaultRows(prev => prev.map(r => r.id === row.id ? { ...r, variant: e.target.value } : r))}
+                    >
+                      <option value="normal">Normal</option>
+                      <option value="golden">✦ Golden</option>
+                      <option value="rainbow">◈ Rainbow</option>
+                    </select>
+                    <input
+                      style={{ background: "#080b14", border: "1px solid #1e2338", borderRadius: 8, color: "#c8cfe8", fontFamily: "inherit", fontSize: 12, padding: "8px", outline: "none", width: "100%", boxSizing: "border-box", textAlign: "center" }}
+                      type="number" min={1} max={9999} value={row.qty}
+                      onChange={e => setVaultRows(prev => prev.map(r => r.id === row.id ? { ...r, qty: parseInt(e.target.value) || 1 } : r))}
+                    />
+                    <button
+                      style={{ background: "transparent", border: "1px solid #1e2338", borderRadius: 8, color: "#4a5070", fontSize: 14, width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+                      onClick={() => setVaultRows(prev => prev.filter(r => r.id !== row.id))}
+                    >✕</button>
+                  </div>
+                ))}
+                <div style={{ display: "flex", gap: 8, margin: "10px 0 18px", flexWrap: "wrap" }}>
+                  <button
+                    style={{ padding: "9px 18px", borderRadius: 10, fontFamily: "inherit", fontSize: 12, fontWeight: 700, cursor: "pointer", border: "1px solid #5a6aaf", background: "rgba(90,106,175,.15)", color: "#a0b0ff", letterSpacing: .3 }}
+                    onClick={() => setVaultRows(prev => [...prev, { id: Date.now(), pet: pets[0]?.name || "", variant: "normal", qty: 1 }])}
+                  >+ Add Pet</button>
+                  <button
+                    style={{ padding: "9px 18px", borderRadius: 10, fontFamily: "inherit", fontSize: 12, fontWeight: 700, cursor: "pointer", border: "1px solid #1e2338", background: "transparent", color: "#4a5070", letterSpacing: .3 }}
+                    onClick={() => setVaultRows([])}
+                  >Clear</button>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: 16, borderTop: "1px solid #1e2338" }}>
+                  <span style={{ fontSize: 13, color: "#8090b0", fontWeight: 500 }}>Total vault value</span>
+                  <span style={{ fontSize: 22, fontWeight: 900, color: "#a0b0ff" }}>{fmtNum(vaultTotal)} <span style={{ fontSize: 13, fontWeight: 500, color: "#4a5070" }}>tokens</span></span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ textAlign: "center", color: "#252840", fontSize: 11, padding: "36px 16px 0", letterSpacing: .5 }}>
+            The Overworld Value List · Values are community estimates
+          </div>
+        </div>
+      )}
+
+      {/* ── Admin toggle button ── */}
+      <button
+        style={{ position: "fixed", bottom: 20, right: 20, background: isAdmin ? "rgba(200,150,42,.1)" : "#10141f", border: `1px solid ${isAdmin ? "#c8962a" : "#1e2338"}`, borderRadius: 10, color: isAdmin ? "#f0c050" : "#4a5070", fontFamily: "inherit", fontSize: 11, fontWeight: 600, padding: "8px 14px", cursor: "pointer", zIndex: 100, letterSpacing: .4 }}
+        onClick={() => isAdmin ? adminLogout() : setShowPw(true)}
+      >{isAdmin ? "✓ Admin" : "⚙ Admin"}</button>
+    </div>
+  );
+}
+
+// ─── PetCard ──────────────────────────────────────────────────────────────────
+
+function PetCard({ p, variant }) {
+  const val = calcVal(p.value, variant);
+  const trendAmt = Math.max(1, Math.round(p.value * 0.015));
+  const vm = VARIANT_META[variant];
+  const cm = CAT_META[p.cat] || CAT_META.Normal;
+
+  return (
+    <div style={{ background: "#10141f", border: "1px solid #1e2338", borderRadius: 18, overflow: "hidden", transition: "border-color .2s" }}
+      onMouseEnter={e => e.currentTarget.style.borderColor = "#2e3550"}
+      onMouseLeave={e => e.currentTarget.style.borderColor = "#1e2338"}
+    >
+      <div style={{ background: "#080b14", display: "flex", flexDirection: "column", alignItems: "center", padding: "20px 16px 0", position: "relative" }}>
+        <div style={{ position: "absolute", top: 12, left: 14, right: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 10px", borderRadius: 20, background: "rgba(58,32,96,.6)", color: "#c0a0ff", border: "1px solid #5a3a8a" }}>
+            EXIST: {fmtNum(p.exist)}
+          </span>
+          <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 10px", borderRadius: 20, border: `1px solid ${cm.border}`, color: cm.text, background: cm.bg }}>
+            {cm.label}
+          </span>
+        </div>
+
+        <div style={{ width: 120, height: 120, borderRadius: 14, background: "#10141f", border: "1px solid #1e2338", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 58, marginTop: 10, overflow: "hidden" }}>
+          {p.image
+            ? <img src={p.image} alt={p.name} style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 13 }} />
+            : <span>{p.emoji || "❓"}</span>
+          }
+        </div>
+
+        <div style={{ fontSize: 10, color: "#4a5070", margin: "10px 0 6px" }}>Last updated: recently</div>
+        <div style={{ fontSize: 15, fontWeight: 800, color: "#fff", textAlign: "center", paddingBottom: 16, letterSpacing: .5, textTransform: "uppercase" }}>{p.name}</div>
+      </div>
+
+      <div style={{ padding: "0 20px 16px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0", borderTop: "1px solid #1e2338" }}>
+          <span style={{ fontSize: 13, color: "#8090b0" }}>Variant</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: vm.text }}>{vm.icon}{vm.label}</span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0", borderTop: "1px solid #1e2338" }}>
+          <span style={{ fontSize: 13, color: "#8090b0" }}>Value</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ color: p.trend === "up" ? "#30d454" : "#e04040", fontSize: 12 }}>
+              {p.trend === "up" ? `▲ ${trendAmt}` : `▼ ${trendAmt}`}
+            </span>
+            <span style={{ color: "#2a2f44" }}>|</span>
+            <span>{fmtNum(val)}</span>
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── AdminCard ────────────────────────────────────────────────────────────────
+
+function AdminCard({ p, saved, onUpdate, onSave, onDelete, onImageUpload }) {
+  const [fileInput, setFileInput] = useState(null);
+
+  return (
+    <div style={{ background: "#10141f", border: "1px solid #1e2338", borderRadius: 16, padding: 18, marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+        <div style={{ width: 52, height: 52, borderRadius: 10, background: "#080b14", border: "1px solid #1e2338", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, flexShrink: 0, overflow: "hidden" }}>
+          {p.image ? <img src={p.image} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 9 }} /> : <span>{p.emoji || "❓"}</span>}
+        </div>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: "#fff" }}>{p.name}</div>
+          <div style={{ fontSize: 10, color: "#4a5070", textTransform: "uppercase", letterSpacing: .5, marginTop: 2 }}>{p.cat}</div>
+        </div>
+        <button style={{ marginLeft: "auto", background: "transparent", border: "1px solid #1e2338", borderRadius: 8, color: "#4a5070", fontSize: 12, padding: "6px 10px", cursor: "pointer", fontFamily: "inherit" }} onClick={onDelete}>🗑 Delete</button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        {[
+          ["Pet Name",      "name",  "text",         p.name  ],
+          ["Category",      "cat",   "select-cat",   p.cat   ],
+          ["Value (tokens)","value", "number",        p.value ],
+          ["Exist Count",   "exist", "number",        p.exist ],
+          ["Emoji",         "emoji", "text",          p.emoji ],
+          ["Trend",         "trend", "select-trend",  p.trend ],
+        ].map(([label, field, type, val]) => (
+          <div key={field} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: .8, textTransform: "uppercase", color: "#4a5070" }}>{label}</div>
+            {type === "select-cat" ? (
+              <select style={{ background: "#080b14", border: "1px solid #1e2338", borderRadius: 8, color: "#c8cfe8", fontFamily: "inherit", fontSize: 13, padding: "8px 10px", outline: "none" }} value={val} onChange={e => onUpdate(field, e.target.value)}>
+                <option value="Normal">Normal</option>
+                <option value="Limited">Limited</option>
+                <option value="Summer">Summer Event</option>
+              </select>
+            ) : type === "select-trend" ? (
+              <select style={{ background: "#080b14", border: "1px solid #1e2338", borderRadius: 8, color: "#c8cfe8", fontFamily: "inherit", fontSize: 13, padding: "8px 10px", outline: "none" }} value={val} onChange={e => onUpdate(field, e.target.value)}>
+                <option value="up">▲ Up</option>
+                <option value="down">▼ Down</option>
+              </select>
+            ) : (
+              <input style={{ background: "#080b14", border: "1px solid #1e2338", borderRadius: 8, color: "#c8cfe8", fontFamily: "inherit", fontSize: 13, padding: "8px 10px", outline: "none", width: "100%", boxSizing: "border-box" }} type={type} value={val} onChange={e => onUpdate(field, type === "number" ? parseInt(e.target.value) || 0 : e.target.value)} />
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 10 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: .8, textTransform: "uppercase", color: "#4a5070", marginBottom: 4 }}>Pet Image</div>
+        <div style={{ display: "flex", gap: 6 }}>
+          <input
+            style={{ flex: 1, background: "#080b14", border: "1px solid #1e2338", borderRadius: 8, color: "#c8cfe8", fontFamily: "inherit", fontSize: 12, padding: "8px 10px", outline: "none", boxSizing: "border-box" }}
+            type="text" placeholder="Paste image URL…"
+            value={p.image && p.image.startsWith("data:") ? "(uploaded image)" : (p.image || "")}
+            onChange={e => onUpdate("image", e.target.value)}
+          />
+          <button style={{ background: "#080b14", border: "1px solid #1e2338", borderRadius: 8, color: "#4a5070", fontSize: 11, fontWeight: 600, padding: "0 12px", cursor: "pointer", whiteSpace: "nowrap", fontFamily: "inherit" }} onClick={() => fileInput && fileInput.click()}>
+            📁 Upload
+          </button>
+          <input ref={el => setFileInput(el)} type="file" accept="image/*" style={{ display: "none" }} onChange={e => onImageUpload(e.target.files[0])} />
+        </div>
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+        <button
+          style={{ padding: "8px 22px", borderRadius: 9, background: saved ? "rgba(48,212,84,.1)" : "rgba(90,106,175,.2)", border: `1px solid ${saved ? "#30d454" : "#5a6aaf"}`, color: saved ? "#30d454" : "#a0b0ff", fontFamily: "inherit", fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+          onClick={onSave}
+        >{saved ? "✓ Saved for everyone!" : "Save"}</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Mount ────────────────────────────────────────────────────────────────────
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App />);
+</script>
+</body>
+</html>
